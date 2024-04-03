@@ -784,6 +784,13 @@ config CHARGER_WILCO
 	  information can be found in
 	  Documentation/ABI/testing/sysfs-class-power-wilco
 
+config XM_POWER_SUPPLY
+	tristate "Xiaomi power supply config"
+	help
+	  Say Y or M here to enable xiaomi power supply
+	  
 source "drivers/power/supply/qcom/Kconfig"
+
+source "drivers/power/supply/xiaomi/Kconfig"
 
 endif # POWER_SUPPLY
