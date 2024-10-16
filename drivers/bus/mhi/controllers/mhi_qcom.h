@@ -19,7 +19,7 @@
 #define MHI_BHI_OEMPKHASH_SEG (16)
 
 /* runtime suspend timer */
-#define MHI_RPM_SUSPEND_TMR_MS (250)
+#define MHI_RPM_SUSPEND_TMR_MS (150)
 #define MHI_PCI_BAR_NUM (0)
 
 /* timesync time calculations */
