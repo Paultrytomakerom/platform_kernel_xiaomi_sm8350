@@ -95,16 +95,17 @@ struct teo_idle_state {
  * struct teo_cpu - CPU data used by the TEO cpuidle governor.
  * @time_span_ns: Time between idle state selection and post-wakeup update.
  * @sleep_length_ns: Time till the closest timer event (at the selection time).
- * @states: Idle states data corresponding to this CPU.
- * @interval_idx: Index of the most recent saved idle interval.
- * @intervals: Saved idle duration values.
+ * @state_bins: Idle state data bins for this CPU.
+ * @total: Grand total of the "intercepts" and "hits" mertics for all bins.
+ * @tick_hits: Number of "hits" after TICK_NSEC.
  */
 struct teo_cpu {
-	u64 time_span_ns;
-	u64 sleep_length_ns;
-	struct teo_idle_state states[CPUIDLE_STATE_MAX];
-	int interval_idx;
-	unsigned int intervals[INTERVALS];
+	s64 time_span_ns;
+	s64 sleep_length_ns;
+	struct teo_bin state_bins[CPUIDLE_STATE_MAX];
+	unsigned int total;
+	unsigned int tick_hits;
+	s64 wfi_timeout_ns;
 };
 
 static DEFINE_PER_CPU(struct teo_cpu, teo_cpus);
@@ -416,6 +417,15 @@ static int teo_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		unsigned int delta_tick_us = ktime_to_us(delta_tick);
 
 		*stop_tick = false;
+		
+	/*
+	 * Allow the tick to be stopped unless the selected state is a polling
+	 * one or the expected idle duration is shorter than the tick period
+	 * length.
+	 */
+	 if ((!(drv->states[idx].flags & CPUIDLE_FLAG_POLLING) &&
+	    duration_ns >= TICK_NSEC) || tick_nohz_tick_stopped())
+		goto out_wfi_timeout;
 
 		/*
 		 * The tick is not going to be stopped, so if the target
@@ -425,9 +435,33 @@ static int teo_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		 */
 		if (idx > 0 && drv->states[idx].target_residency > delta_tick_us)
 			idx = teo_find_shallower_state(drv, dev, idx, delta_tick_us);
-	}
+			
+	out_tick:
+	        *stop_tick = false;
+        out_wfi_timeout:
+	/*
+	 * Set a limit to how long the CPU can remain in WFI in case of a
+	 * misprediction that results in too much time spent in WFI. This way,
+	 * the CPU can be kicked out of WFI and enter a deeper idle state if a
+	 * deeper state fits within the residency requirement.
+	 */
+#define WFI_TIMEOUT_NS (1 * NSEC_PER_MSEC)
+	if (drv->state_count > 1 && !idx && constraint_idx &&
+	    delta_tick > duration_ns &&
+	    (delta_tick - duration_ns - WFI_TIMEOUT_NS) >
+	    drv->states[1].target_residency_ns)
+		cpu_data->wfi_timeout_ns = duration_ns + WFI_TIMEOUT_NS;
+	else
+		cpu_data->wfi_timeout_ns = 0;
 
 	return idx;
+}
+
+s64 teo_wfi_timeout_ns(void)
+{
+	struct teo_cpu *cpu_data = this_cpu_ptr(&teo_cpus);
+
+	return cpu_data->wfi_timeout_ns;
 }
 
 /**
